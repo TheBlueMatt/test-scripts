@@ -13,7 +13,7 @@ mkdir out && cp bitcoind test_bitcoin out/
 
 git apply /mnt/www/pull-tester/files/bitcoind-comparison.patch
 make -f makefile.unix -j2 USE_UPNP=-
-./bitcoind -connect=0.0.0.0 -datadir=/home/ubuntu/.bitcoin -rpcuser=user -rpcpassword=pass -listen -port $1&
+./bitcoind -connect=0.0.0.0 -datadir=/home/ubuntu/.bitcoin -rpcuser=user -rpcpassword=pass -listen -port=$1&
 BITCOIND_PID=$!
 while [ "x`cat /home/ubuntu/.bitcoin/debug.log | grep 'Done loading' | wc -l`" = "x0" ]; do sleep 1; done
 LD_PRELOAD=/usr/lib/jvm/java-6-openjdk/jre/lib/i386/jli/libjli.so java -jar /mnt/www/pull-tester/files/BitcoinjBitcoindComparisonTool.jar $1
