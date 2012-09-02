@@ -1059,8 +1059,14 @@ public class FullBlockTestGenerator {
         // -> b39 (11) -> b42 (12) -> b43 (13) -> b53 (14) -> b55 (15) -> b57 (16) -> b60 (17)
         //                                                                                    \-> b62 (18)
         //        
-        Block b62 = createNextBlock(b60, chainHeadHeight + 17, out18, null);
-        b62.getTransactions().get(1).setLockTime(0xffffffff);
+        Block b62 = createNextBlock(b60, chainHeadHeight + 17, null, null);
+        {
+            Transaction tx = new Transaction(params);
+            tx.setLockTime(0xffffffffL);
+            tx.addOutput(new TransactionOutput(params, tx, BigInteger.ZERO, new byte[] { Script.OP_TRUE }));
+            addOnlyInputToTransaction(tx, out18, 0);
+            b62.addTransaction(tx);
+        }
         b62.solve();
         blocks.add(new BlockAndValidity(b62, false, true, b60.getHash(), "b62"));
         
@@ -1091,7 +1097,12 @@ public class FullBlockTestGenerator {
     }
     
     private void addOnlyInputToTransaction(Transaction t, TransactionOutPointWithValue prevOut) throws ScriptException {
+        addOnlyInputToTransaction(t, prevOut, TransactionInput.NO_SEQUENCE);
+    }
+    
+    private void addOnlyInputToTransaction(Transaction t, TransactionOutPointWithValue prevOut, long sequence) throws ScriptException {
         TransactionInput input = new TransactionInput(params, t, new byte[]{}, prevOut.outpoint);
+        input.setSequence(sequence);
         t.addInput(input);
 
         byte[] connectedPubKeyScript = prevOut.scriptPubKey.program;
