@@ -19,6 +19,7 @@ while [ "x`cat /home/ubuntu/.bitcoin/debug.log | grep 'Done loading' | wc -l`" =
 LD_PRELOAD=/usr/lib/jvm/java-6-openjdk/jre/lib/i386/jli/libjli.so java -jar /mnt/test-scripts/BitcoinjBitcoindComparisonTool.jar $1
 kill -9 $BITCOIND_PID
 rm -rf /home/ubuntu/.bitcoin/*
+rm -f /home/ubuntu/.bitcoin/.lock
 
 cd ..
 git reset --hard
@@ -53,6 +54,7 @@ while [ "x`cat /home/ubuntu/.bitcoin/debug.log | grep 'Done loading' | wc -l`" =
 LD_PRELOAD=/usr/lib/jvm/java-6-openjdk/jre/lib/i386/jli/libjli.so java -jar /mnt/test-scripts/BitcoinjBitcoindComparisonTool.jar $1
 kill -9 $BITCOIND_PID
 rm -rf /home/ubuntu/.bitcoin/*
+rm -f /home/ubuntu/.bitcoin/.lock
 git reset --hard
 
 make -f makefile.linux-mingw clean
