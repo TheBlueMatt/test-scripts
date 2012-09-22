@@ -1,5 +1,5 @@
 #!/bin/sh
-# Usage: build-script.sh bitcoind-port
+# Usage: build-script.sh bitcoind-port rpc-port
 set -e
 set -o xtrace
 
@@ -13,7 +13,7 @@ mkdir out && cp bitcoind test_bitcoin out/
 
 git apply /mnt/test-scripts/bitcoind-comparison.patch
 make -f makefile.unix -j2 USE_UPNP=-
-./bitcoind -connect=0.0.0.0 -datadir=/home/ubuntu/.bitcoin -rpcuser=user -rpcpassword=pass -listen -port=$1&
+./bitcoind -connect=0.0.0.0 -datadir=/home/ubuntu/.bitcoin -rpcuser=user -rpcpassword=pass -listen -port=$1 -rpcport=$2&
 BITCOIND_PID=$!
 while [ "x`cat /home/ubuntu/.bitcoin/debug.log | grep 'Done loading' | wc -l`" = "x0" ]; do sleep 1; done
 LD_PRELOAD=/usr/lib/jvm/java-6-openjdk/jre/lib/i386/jli/libjli.so java -jar /mnt/test-scripts/BitcoinjBitcoindComparisonTool.jar $1
@@ -48,7 +48,7 @@ cp bitcoind.exe test_bitcoin.exe out/
 
 git apply /mnt/test-scripts/bitcoind-comparison.patch
 make -f makefile.linux-mingw -j2 DEPSDIR=/mnt/mingw USE_UPNP=0
-./bitcoind.exe -connect=0.0.0.0 -datadir=/home/ubuntu/.bitcoin -rpcuser=user -rpcpassword=pass -listen -port=$1&
+./bitcoind.exe -connect=0.0.0.0 -datadir=/home/ubuntu/.bitcoin -rpcuser=user -rpcpassword=pass -listen -port=$1 -rpcport=$2&
 BITCOIND_PID=$!
 while [ "x`cat /home/ubuntu/.bitcoin/debug.log | grep 'Done loading' | wc -l`" = "x0" ]; do sleep 1; done
 LD_PRELOAD=/usr/lib/jvm/java-6-openjdk/jre/lib/i386/jli/libjli.so java -jar /mnt/test-scripts/BitcoinjBitcoindComparisonTool.jar $1
