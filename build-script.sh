@@ -13,6 +13,8 @@ mkdir out && cp bitcoind test_bitcoin out/
 
 git apply /mnt/test-scripts/bitcoind-comparison.patch
 make -f makefile.unix -j2 USE_UPNP=-
+rm -rf /home/ubuntu/.bitcoin/*
+rm -f /home/ubuntu/.bitcoin/.lock
 ./bitcoind -connect=0.0.0.0 -datadir=/home/ubuntu/.bitcoin -rpcuser=user -rpcpassword=pass -listen -port=$1 -rpcport=$2&
 BITCOIND_PID=$!
 while [ "x`cat /home/ubuntu/.bitcoin/debug.log | grep 'Done loading' | wc -l`" = "x0" ]; do sleep 1; done
@@ -48,6 +50,8 @@ cp bitcoind.exe test_bitcoin.exe out/
 
 git apply /mnt/test-scripts/bitcoind-comparison.patch
 make -f makefile.linux-mingw -j2 DEPSDIR=/mnt/mingw USE_UPNP=0
+rm -rf /home/ubuntu/.bitcoin/*
+rm -f /home/ubuntu/.bitcoin/.lock
 ./bitcoind.exe -connect=0.0.0.0 -datadir=/home/ubuntu/.bitcoin -rpcuser=user -rpcpassword=pass -listen -port=$1 -rpcport=$2&
 BITCOIND_PID=$!
 while [ "x`cat /home/ubuntu/.bitcoin/debug.log | grep 'Done loading' | wc -l`" = "x0" ]; do sleep 1; done
