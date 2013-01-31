@@ -11,6 +11,11 @@ make -f makefile.unix -j6 test_bitcoin USE_UPNP=-
 make -f makefile.unix -j6 USE_UPNP=-
 mkdir out && cp bitcoind test_bitcoin out/
 
+BITCOIND_PID=`ps aux | grep bitcoin | grep "\-port=$1 -rpcport=$2" | awk '{ print $2 }'`
+if [ "$BITCOIND_PID" != "" ]; then
+	kill -9 $BITCOIND_PID
+fi
+
 git apply /mnt/test-scripts/bitcoind-comparison.patch
 make -f makefile.unix -j6 USE_UPNP=-
 rm -rf /home/ubuntu/.bitcoin/*
