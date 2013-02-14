@@ -3,21 +3,22 @@
 set -e
 set -o xtrace
 
-git clean -f -x -d
-
-cd src
-make -f makefile.unix -j6 test_bitcoin USE_UPNP=-
-./test_bitcoin
-make -f makefile.unix -j6 USE_UPNP=-
-mkdir out && cp bitcoind test_bitcoin out/
-
+# Clean up old bitcoinds to keep this script from hanging
 BITCOIND_PID=`ps aux | grep bitcoin | grep "\-port=$1 -rpcport=$2" | awk '{ print $2 }'`
 if [ "$BITCOIND_PID" != "" ]; then
 	kill -9 $BITCOIND_PID
 fi
 
+git clean -f -x -d
+
+cd src
+make -f makefile.unix -j6 test_bitcoin USE_UPNP=- CXXFLAGS=--coverage LDFLAGS=--coverage
+lcov -c -i -d `pwd` -o baseline.info
+./test_bitcoin
+lcov -c -d `pwd` -t test_bitcoin -o test_bitcoin.info
+
 git apply /mnt/test-scripts/bitcoind-comparison.patch
-make -f makefile.unix -j6 USE_UPNP=-
+make -f makefile.unix -j6 USE_UPNP=- CXXFLAGS=--coverage LDFLAGS=--coverage
 rm -rf /home/ubuntu/.bitcoin/*
 rm -f /home/ubuntu/.bitcoin/.lock
 ./bitcoind -connect=0.0.0.0 -datadir=/home/ubuntu/.bitcoin -rpcuser=user -rpcpassword=pass -listen -port=$1 -rpcport=$2&
@@ -28,8 +29,28 @@ kill -9 $BITCOIND_PID
 rm -rf /home/ubuntu/.bitcoin/*
 rm -f /home/ubuntu/.bitcoin/.lock
 
-cd ..
+lcov -c -d `pwd` -t Total -o total.info
+lcov -a baseline.info -a test_bitcoin.info -o test_bitcoin_coverage.info
+genhtml -s test_bitcoin.info -o test_bitcoin.coverage/
+lcov -a baseline.info -a test_bitcoin.info -a total.info -o total_coverage.info | grep "\%" | awk '{ print substr($2,0,4) }' > ./coverage_percent.txt
+genhtml -s total_coverage.info -o total.coverage/
+
+LINES_COVERAGE=`cat ./coverage_percent.txt | head -n1`
+FUNCTION_COVERAGE=`cat ./coverage_percent.txt | tail -n1`
+LINES_TARGET=`cat /mnt/test-scripts/coverage_percent.txt | head -n1`
+FUNCTION_TARGET=`cat /mnt/test-scripts/coverage_percent.txt | tail -n1`
+EXIT_CODE=0
+if [ $LINES_COVERAGE < $LINES_TARGET -o $FUNCTION_COVERAGE < $FUNCTION_TARGET ]; then
+	EXIT_CODE=1
+fi
+cp ./coverage_percent.txt /mnt/test-scripts/coverage_percent.txt
+
 git reset --hard
+make -f makefile.unix clean
+make -f makefile.unix -j6 USE_UPNP=-
+mkdir out && cp bitcoind test_bitcoin out/
+
+cd ..
 
 qmake bitcoin-qt.pro BITCOIN_QT_TEST=1 USE_UPNP=-
 make -j6
@@ -84,3 +105,5 @@ make clean
 
 mv out/* ./
 rm -r out
+
+exit $EXIT_CODE
