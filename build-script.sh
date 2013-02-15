@@ -12,12 +12,23 @@ fi
 git clean -f -x -d
 
 cd src
+# Work around broken leveldb makefile (doesnt work with CXXFLAGS)
+cd leveldb
+make libleveldb.a libmemenv.a
+cd ..
+# First build and run test_bitcoin normally
 make -f makefile.unix -j6 test_bitcoin USE_UPNP=- CXXFLAGS=--coverage LDFLAGS=--coverage
-lcov -c -i -d `pwd` -o baseline.info
 ./test_bitcoin
-lcov -c -d `pwd` -t test_bitcoin -o test_bitcoin.info
 
+# Now run test_bitcoin again with the bitcoind-comparison patch
+# This makes lcov happy (we cant have coverage from two different versions of main.o)
+# and makes sure that the patch is still sane (well...barely) on this branch
 git apply /mnt/test-scripts/bitcoind-comparison.patch
+make -f makefile.unix -j6 test_bitcoin USE_UPNP=- CXXFLAGS=--coverage LDFLAGS=--coverage
+lcov -c -i -d `pwd` -b `pwd` -o baseline.info
+./test_bitcoin
+lcov -c -d `pwd` -b `pwd` -t test_bitcoin -o test_bitcoin.info
+
 make -f makefile.unix -j6 USE_UPNP=- CXXFLAGS=--coverage LDFLAGS=--coverage
 rm -rf /home/ubuntu/.bitcoin/*
 rm -f /home/ubuntu/.bitcoin/.lock
@@ -29,24 +40,28 @@ kill -9 $BITCOIND_PID
 rm -rf /home/ubuntu/.bitcoin/*
 rm -f /home/ubuntu/.bitcoin/.lock
 
-lcov -c -d `pwd` -t Total -o total.info
-lcov -a baseline.info -a test_bitcoin.info -o test_bitcoin_coverage.info
-genhtml -s test_bitcoin.info -o test_bitcoin.coverage/
-lcov -a baseline.info -a test_bitcoin.info -a total.info -o total_coverage.info | grep "\%" | awk '{ print substr($2,0,4) }' > ./coverage_percent.txt
+lcov -c -d `pwd` -b `pwd` -t BitcoinJBlockTest -o block_test.info
+lcov -r baseline.info "/usr/include/*" -o baseline_filtered.info
+lcov -r test_bitcoin.info "/usr/include/*" -o test_bitcoin_filtered.info
+lcov -r block_test.info "/usr/include/*" -o block_test_filtered.info
+lcov -a baseline_filtered.info -a test_bitcoin_filtered.info -o test_bitcoin_coverage.info
+genhtml -s test_bitcoin_coverage.info -o test_bitcoin.coverage/
+lcov -a baseline_filtered.info -a test_bitcoin_filtered.info -a block_test_filtered.info -o total_coverage.info | grep "\%" | awk '{ print substr($3,2,50) "/" $5 }' > ./coverage_percent.txt
 genhtml -s total_coverage.info -o total.coverage/
 
 LINES_COVERAGE=`cat ./coverage_percent.txt | head -n1`
-FUNCTION_COVERAGE=`cat ./coverage_percent.txt | tail -n1`
+FUNCTION_COVERAGE=`cat ./coverage_percent.txt | head -n2 | tail -n1`
 LINES_TARGET=`cat /mnt/test-scripts/coverage_percent.txt | head -n1`
-FUNCTION_TARGET=`cat /mnt/test-scripts/coverage_percent.txt | tail -n1`
+FUNCTION_TARGET=`cat /mnt/test-scripts/coverage_percent.txt | head -n2 | tail -n1`
 EXIT_CODE=0
-if [ $LINES_COVERAGE < $LINES_TARGET -o $FUNCTION_COVERAGE < $FUNCTION_TARGET ]; then
-	EXIT_CODE=1
+if [ "x"`echo "scale = 10; $LINES_COVERAGE < $LINES_TARGET || $FUNCTION_COVERAGE < $FUNCTION_TARGET" | bc` = "x1" ]; then
+	EXIT_CODE=42
 fi
 cp ./coverage_percent.txt /mnt/test-scripts/coverage_percent.txt
 
 git reset --hard
 make -f makefile.unix clean
+make -f makefile.unix -j6 test_bitcoin USE_UPNP=-
 make -f makefile.unix -j6 USE_UPNP=-
 mkdir out && cp bitcoind test_bitcoin out/
 
