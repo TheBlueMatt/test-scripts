@@ -16,11 +16,7 @@ cd src
 cd leveldb
 make libleveldb.a libmemenv.a
 cd ..
-# First build and run test_bitcoin normally
-make -f makefile.unix -j6 test_bitcoin USE_UPNP=- CXXFLAGS=--coverage LDFLAGS=--coverage
-./test_bitcoin
-
-# Now run test_bitcoin again with the bitcoind-comparison patch
+# First run test_bitcoin with the bitcoind-comparison patch
 # This makes lcov happy (we cant have coverage from two different versions of main.o)
 # and makes sure that the patch is still sane (well...barely) on this branch
 git apply /mnt/test-scripts/bitcoind-comparison.patch
@@ -28,6 +24,7 @@ make -f makefile.unix -j6 test_bitcoin USE_UPNP=- CXXFLAGS=--coverage LDFLAGS=--
 lcov -c -i -d `pwd` -b `pwd` -o baseline.info
 ./test_bitcoin
 lcov -c -d `pwd` -b `pwd` -t test_bitcoin -o test_bitcoin.info
+lcov -z -d `pwd`
 
 make -f makefile.unix -j6 USE_UPNP=- CXXFLAGS=--coverage LDFLAGS=--coverage
 rm -rf /home/ubuntu/.bitcoin/*
@@ -36,7 +33,12 @@ rm -f /home/ubuntu/.bitcoin/.lock
 BITCOIND_PID=$!
 while [ "x`cat /home/ubuntu/.bitcoin/debug.log | grep 'Done loading' | wc -l`" = "x0" ]; do sleep 1; done
 LD_PRELOAD=/usr/lib/jvm/java-6-openjdk/jre/lib/i386/jli/libjli.so java -jar /mnt/test-scripts/BitcoinjBitcoindComparisonTool.jar $1
-kill -9 $BITCOIND_PID
+kill $BITCOIND_PID
+sleep 15
+if kill -9 $BITCOIND_PID ; then
+	echo "Bitcoind didn't quit in time"
+	exit 1
+fi
 rm -rf /home/ubuntu/.bitcoin/*
 rm -f /home/ubuntu/.bitcoin/.lock
 
@@ -62,6 +64,8 @@ cp ./coverage_percent.txt /mnt/test-scripts/coverage_percent.txt
 git reset --hard
 make -f makefile.unix clean
 make -f makefile.unix -j6 test_bitcoin USE_UPNP=-
+# Now run test_bitcoin normally
+./test_bitcoin
 make -f makefile.unix -j6 USE_UPNP=-
 mkdir out && cp bitcoind test_bitcoin out/
 
