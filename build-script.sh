@@ -32,7 +32,7 @@ rm -f /home/ubuntu/.bitcoin/.lock
 ./bitcoind -connect=0.0.0.0 -datadir=/home/ubuntu/.bitcoin -rpcuser=user -rpcpassword=pass -listen -port=$1 -rpcport=$2&
 BITCOIND_PID=$!
 while [ "x`cat /home/ubuntu/.bitcoin/debug.log | grep 'Done loading' | wc -l`" = "x0" ]; do sleep 1; done
-LD_PRELOAD=/usr/lib/jvm/java-6-openjdk/jre/lib/i386/jli/libjli.so java -jar /mnt/test-scripts/BitcoinjBitcoindComparisonTool.jar $1
+LD_PRELOAD=/usr/lib/jvm/java-6-openjdk/jre/lib/i386/jli/libjli.so java -Xmx5G -jar /mnt/test-scripts/BitcoinjBitcoindComparisonTool.jar $1
 kill $BITCOIND_PID
 sleep 15
 if kill -9 $BITCOIND_PID ; then
@@ -100,7 +100,7 @@ rm -f /home/ubuntu/.bitcoin/.lock
 ./bitcoind.exe -connect=0.0.0.0 -datadir=/home/ubuntu/.bitcoin -rpcuser=user -rpcpassword=pass -listen -port=$1 -rpcport=$2&
 BITCOIND_PID=$!
 while [ "x`cat /home/ubuntu/.bitcoin/debug.log | grep 'Done loading' | wc -l`" = "x0" ]; do sleep 1; done
-LD_PRELOAD=/usr/lib/jvm/java-6-openjdk/jre/lib/i386/jli/libjli.so java -jar /mnt/test-scripts/BitcoinjBitcoindComparisonTool.jar $1
+LD_PRELOAD=/usr/lib/jvm/java-6-openjdk/jre/lib/i386/jli/libjli.so java -Xmx5G -jar /mnt/test-scripts/BitcoinjBitcoindComparisonTool.jar $1
 kill -9 $BITCOIND_PID
 rm -rf /home/ubuntu/.bitcoin/*
 rm -f /home/ubuntu/.bitcoin/.lock
