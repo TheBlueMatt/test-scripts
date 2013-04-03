@@ -35,7 +35,7 @@ index 8c115c2..1e70ff2 100644
  
          if (fTestNet)
          {
-@@ -2992,7 +2992,7 @@ bool static AlreadyHave(const CInv& inv)
+@@ -3007,7 +3007,7 @@ bool static AlreadyHave(const CInv& inv)
  // The message start string is designed to be unlikely to occur in normal data.
  // The characters are rarely used upper ASCII, not valid as UTF-8, and produce
  // a large 4-byte int at any alignment.
@@ -43,7 +43,7 @@ index 8c115c2..1e70ff2 100644
 +unsigned char pchMessageStart[4] = { 0xfa, 0xbf, 0xb5, 0xda };
  
  
- bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
+ void static ProcessGetData(CNode* pfrom)
 diff --git a/src/test/miner_tests.cpp b/src/test/miner_tests.cpp
 index af28465..ee9a4db 100644
 --- a/src/test/miner_tests.cpp
