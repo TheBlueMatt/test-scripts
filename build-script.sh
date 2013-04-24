@@ -33,10 +33,10 @@ lcov -z -d `pwd`
 make -f makefile.unix -j6 USE_UPNP=- CXXFLAGS=--coverage LDFLAGS=--coverage
 rm -rf /home/ubuntu/.bitcoin/*
 rm -f /home/ubuntu/.bitcoin/.lock
-./bitcoind -connect=0.0.0.0 -datadir=/home/ubuntu/.bitcoin -rpcuser=user -rpcpassword=pass -listen -port=$1 -rpcport=$2 -keypool=3 &
+./bitcoind -connect=0.0.0.0 -datadir=/home/ubuntu/.bitcoin -rpcuser=user -rpcpassword=pass -listen -port=$1 -rpcport=$2 -keypool=3 -debug -logtimestamps &
 BITCOIND_PID=$!
 while [ "x`cat /home/ubuntu/.bitcoin/debug.log | grep 'Done loading' | wc -l`" = "x0" ]; do sleep 1; done
-LD_PRELOAD=/usr/lib/jvm/java-6-openjdk/jre/lib/i386/jli/libjli.so java -Xmx2G -jar /mnt/test-scripts/BitcoinjBitcoindComparisonTool.jar $1
+LD_PRELOAD=/usr/lib/jvm/java-6-openjdk/jre/lib/i386/jli/libjli.so java -Xmx2G -jar /mnt/test-scripts/BitcoinjBitcoindComparisonTool.jar 1 $1
 kill $BITCOIND_PID
 sleep 15
 if kill -9 $BITCOIND_PID ; then
@@ -105,10 +105,10 @@ git apply ../contrib/test-patches/bitcoind-comparison.patch
 make -f makefile.linux-mingw -j6 DEPSDIR=/mnt/mingw USE_UPNP=0
 rm -rf /home/ubuntu/.bitcoin/*
 rm -f /home/ubuntu/.bitcoin/.lock
-./bitcoind.exe -connect=0.0.0.0 -datadir=/home/ubuntu/.bitcoin -rpcuser=user -rpcpassword=pass -listen -port=$1 -rpcport=$2 -keypool=3 &
+./bitcoind.exe -connect=0.0.0.0 -datadir=/home/ubuntu/.bitcoin -rpcuser=user -rpcpassword=pass -listen -port=$1 -rpcport=$2 -keypool=3 -debug -logtimestamps &
 BITCOIND_PID=$!
 while [ "x`cat /home/ubuntu/.bitcoin/debug.log | grep 'Done loading' | wc -l`" = "x0" ]; do sleep 1; done
-LD_PRELOAD=/usr/lib/jvm/java-6-openjdk/jre/lib/i386/jli/libjli.so java -Xmx2G -jar /mnt/test-scripts/BitcoinjBitcoindComparisonTool.jar $1
+LD_PRELOAD=/usr/lib/jvm/java-6-openjdk/jre/lib/i386/jli/libjli.so java -Xmx2G -jar /mnt/test-scripts/BitcoinjBitcoindComparisonTool.jar 0 $1
 kill -9 $BITCOIND_PID
 rm -rf /home/ubuntu/.bitcoin/*
 rm -f /home/ubuntu/.bitcoin/.lock
