@@ -19,11 +19,7 @@ cd ..
 # First run test_bitcoin with the bitcoind-comparison patch
 # This makes lcov happy (we cant have coverage from two different versions of main.o)
 # and makes sure that the patch is still sane (well...barely) on this branch
-git apply ../contrib/test-patches/temp-revert-1.patch
-git apply ../contrib/test-patches/temp-revert-2.patch
-git apply ../contrib/test-patches/temp-revert-3.patch
-git apply ../contrib/test-patches/temp-revert-4.patch
-git apply ../contrib/test-patches/bitcoind-comparison.patch
+git apply ../contrib/test-patches/*.patch
 make -f makefile.unix -j6 test_bitcoin USE_UPNP=- CXXFLAGS=--coverage LDFLAGS=--coverage
 lcov -c -i -d `pwd` -b `pwd` -o baseline.info
 ./test_bitcoin
@@ -97,11 +93,7 @@ make -f makefile.linux-mingw -j6 DEPSDIR=/mnt/mingw USE_UPNP=0
 
 cp bitcoind.exe test_bitcoin.exe out/
 
-git apply ../contrib/test-patches/temp-revert-1.patch
-git apply ../contrib/test-patches/temp-revert-2.patch
-git apply ../contrib/test-patches/temp-revert-3.patch
-git apply ../contrib/test-patches/temp-revert-4.patch
-git apply ../contrib/test-patches/bitcoind-comparison.patch
+git apply ../contrib/test-patches/*.patch
 make -f makefile.linux-mingw -j6 DEPSDIR=/mnt/mingw USE_UPNP=0
 rm -rf /home/ubuntu/.bitcoin/*
 rm -f /home/ubuntu/.bitcoin/.lock
