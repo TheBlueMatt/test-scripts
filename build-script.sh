@@ -11,6 +11,34 @@ fi
 
 git clean -f -x -d
 
+# Build Windows version of Bitcoin-Qt first (it is the thing that breaks most often).
+
+/mnt/mingw/qt/bin/qmake -spec unsupported/win32-g++-cross BITCOIN_QT_TEST=1 PROTOBUF_LIB_PATH=/mnt/mingw/protobuf-2.5.0 PROTOBUF_INCLUDE_PATH=/mnt/mingw/protobuf-2.5.0/src PROTOC=/mnt/mingw/protobuf-2.5.0/protoc MINIUPNPC_LIB_PATH=/mnt/mingw/miniupnpc/ MINIUPNPC_INCLUDE_PATH=/mnt/mingw/ BDB_LIB_PATH=/mnt/mingw/db-4.8.30.NC/build_unix/ BDB_INCLUDE_PATH=/mnt/mingw/db-4.8.30.NC/build_unix/ BOOST_LIB_PATH=/mnt/mingw/boost_1_50_0/stage/lib BOOST_INCLUDE_PATH=/mnt/mingw/boost_1_50_0/ BOOST_LIB_SUFFIX=-mt-s BOOST_THREAD_LIB_SUFFIX=_win32-mt-s OPENSSL_LIB_PATH=/mnt/mingw/openssl-1.0.1c OPENSSL_INCLUDE_PATH=/mnt/mingw/openssl-1.0.1c/include/ QRENCODE_LIB_PATH=/mnt/mingw/qrencode-3.2.0/.libs QRENCODE_INCLUDE_PATH=/mnt/mingw/qrencode-3.2.0 USE_QRCODE=1 INCLUDEPATH=/mnt/mingw DEFINES=BOOST_THREAD_USE_LIB BITCOIN_NEED_QT_PLUGINS=1 QMAKE_LRELEASE=lrelease USE_BUILD_INFO=1 QMAKE_MOC=/mnt/mingw/qt/bin/moc QMAKE_UIC=/mnt/mingw/qt/bin/uic
+make -j6
+./release/bitcoin-qt_test.exe
+mv release/bitcoin-qt_test.exe out/
+
+make clean
+/mnt/mingw/qt/bin/qmake -spec unsupported/win32-g++-cross PROTOBUF_LIB_PATH=/mnt/mingw/protobuf-2.5.0 PROTOBUF_INCLUDE_PATH=/mnt/mingw/protobuf-2.5.0/src PROTOC=/mnt/mingw/protobuf-2.5.0/protoc MINIUPNPC_LIB_PATH=/mnt/mingw/miniupnpc/ MINIUPNPC_INCLUDE_PATH=/mnt/mingw/ BDB_LIB_PATH=/mnt/mingw/db-4.8.30.NC/build_unix/ BDB_INCLUDE_PATH=/mnt/mingw/db-4.8.30.NC/build_unix/ BOOST_LIB_PATH=/mnt/mingw/boost_1_50_0/stage/lib BOOST_INCLUDE_PATH=/mnt/mingw/boost_1_50_0/ BOOST_LIB_SUFFIX=-mt-s BOOST_THREAD_LIB_SUFFIX=_win32-mt-s OPENSSL_LIB_PATH=/mnt/mingw/openssl-1.0.1c OPENSSL_INCLUDE_PATH=/mnt/mingw/openssl-1.0.1c/include/ QRENCODE_LIB_PATH=/mnt/mingw/qrencode-3.2.0/.libs QRENCODE_INCLUDE_PATH=/mnt/mingw/qrencode-3.2.0 USE_QRCODE=1 INCLUDEPATH=/mnt/mingw DEFINES=BOOST_THREAD_USE_LIB BITCOIN_NEED_QT_PLUGINS=1 QMAKE_LRELEASE=lrelease USE_BUILD_INFO=1 QMAKE_MOC=/mnt/mingw/qt/bin/moc QMAKE_UIC=/mnt/mingw/qt/bin/uic
+make -j6
+mv release/bitcoin-qt.exe out/
+make clean
+
+# ... and Linux bitcoint-qt:
+
+qmake bitcoin-qt.pro BITCOIN_QT_TEST=1 USE_UPNP=-
+make -j6
+./bitcoin-qt_test
+
+mkdir out
+mv bitcoin-qt_test out/
+make clean
+
+qmake bitcoin-qt.pro USE_UPNP=-
+make -j6
+mv bitcoin-qt out/
+make clean
+
 cd src
 # Work around broken leveldb makefile (doesnt work with CXXFLAGS)
 cd leveldb
@@ -69,21 +97,6 @@ make -f makefile.unix -j6 test_bitcoin USE_UPNP=-
 make -f makefile.unix -j6 USE_UPNP=-
 mkdir out && cp bitcoind test_bitcoin out/
 
-cd ..
-
-qmake bitcoin-qt.pro BITCOIN_QT_TEST=1 USE_UPNP=-
-make -j6
-./bitcoin-qt_test
-
-mkdir out
-mv bitcoin-qt_test out/
-make clean
-
-qmake bitcoin-qt.pro USE_UPNP=-
-make -j6
-mv bitcoin-qt out/
-make clean
-
 cd src
 make -f makefile.unix clean
 
@@ -110,17 +123,6 @@ make -f makefile.linux-mingw clean
 mv out/* ./
 rm -r out
 cd ..
-
-/mnt/mingw/qt/bin/qmake -spec unsupported/win32-g++-cross BITCOIN_QT_TEST=1 PROTOBUF_LIB_PATH=/mnt/mingw/protobuf-2.5.0 PROTOBUF_INCLUDE_PATH=/mnt/mingw/protobuf-2.5.0/src PROTOC=/mnt/mingw/protobuf-2.5.0/protoc MINIUPNPC_LIB_PATH=/mnt/mingw/miniupnpc/ MINIUPNPC_INCLUDE_PATH=/mnt/mingw/ BDB_LIB_PATH=/mnt/mingw/db-4.8.30.NC/build_unix/ BDB_INCLUDE_PATH=/mnt/mingw/db-4.8.30.NC/build_unix/ BOOST_LIB_PATH=/mnt/mingw/boost_1_50_0/stage/lib BOOST_INCLUDE_PATH=/mnt/mingw/boost_1_50_0/ BOOST_LIB_SUFFIX=-mt-s BOOST_THREAD_LIB_SUFFIX=_win32-mt-s OPENSSL_LIB_PATH=/mnt/mingw/openssl-1.0.1c OPENSSL_INCLUDE_PATH=/mnt/mingw/openssl-1.0.1c/include/ QRENCODE_LIB_PATH=/mnt/mingw/qrencode-3.2.0/.libs QRENCODE_INCLUDE_PATH=/mnt/mingw/qrencode-3.2.0 USE_QRCODE=1 INCLUDEPATH=/mnt/mingw DEFINES=BOOST_THREAD_USE_LIB BITCOIN_NEED_QT_PLUGINS=1 QMAKE_LRELEASE=lrelease USE_BUILD_INFO=1 QMAKE_MOC=/mnt/mingw/qt/bin/moc QMAKE_UIC=/mnt/mingw/qt/bin/uic
-make -j6
-./release/bitcoin-qt_test.exe
-mv release/bitcoin-qt_test.exe out/
-
-make clean
-/mnt/mingw/qt/bin/qmake -spec unsupported/win32-g++-cross PROTOBUF_LIB_PATH=/mnt/mingw/protobuf-2.5.0 PROTOBUF_INCLUDE_PATH=/mnt/mingw/protobuf-2.5.0/src PROTOC=/mnt/mingw/protobuf-2.5.0/protoc MINIUPNPC_LIB_PATH=/mnt/mingw/miniupnpc/ MINIUPNPC_INCLUDE_PATH=/mnt/mingw/ BDB_LIB_PATH=/mnt/mingw/db-4.8.30.NC/build_unix/ BDB_INCLUDE_PATH=/mnt/mingw/db-4.8.30.NC/build_unix/ BOOST_LIB_PATH=/mnt/mingw/boost_1_50_0/stage/lib BOOST_INCLUDE_PATH=/mnt/mingw/boost_1_50_0/ BOOST_LIB_SUFFIX=-mt-s BOOST_THREAD_LIB_SUFFIX=_win32-mt-s OPENSSL_LIB_PATH=/mnt/mingw/openssl-1.0.1c OPENSSL_INCLUDE_PATH=/mnt/mingw/openssl-1.0.1c/include/ QRENCODE_LIB_PATH=/mnt/mingw/qrencode-3.2.0/.libs QRENCODE_INCLUDE_PATH=/mnt/mingw/qrencode-3.2.0 USE_QRCODE=1 INCLUDEPATH=/mnt/mingw DEFINES=BOOST_THREAD_USE_LIB BITCOIN_NEED_QT_PLUGINS=1 QMAKE_LRELEASE=lrelease USE_BUILD_INFO=1 QMAKE_MOC=/mnt/mingw/qt/bin/moc QMAKE_UIC=/mnt/mingw/qt/bin/uic
-make -j6
-mv release/bitcoin-qt.exe out/
-make clean
 
 mv out/* ./
 rm -r out
