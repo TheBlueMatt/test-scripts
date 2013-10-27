@@ -14,30 +14,58 @@ import java.util.*;
 
 import static com.google.bitcoin.script.ScriptOpCodes.*;
 
-class BlockAndValidity {
+/**
+ * Represents a block which is sent to the tested application and which the application must either reject or accept,
+ * depending on the flags in the rule
+ */
+class BlockAndValidity extends Rule {
     Block block;
+    Sha256Hash blockHash;
     boolean connects;
     boolean throwsException;
     Sha256Hash hashChainTipAfterBlock;
     int heightAfterBlock;
-    String blockName;
-    
-    public BlockAndValidity(Map<Sha256Hash, Integer> blockToHeightMap, Block block, boolean connects, boolean throwsException, Sha256Hash hashChainTipAfterBlock, int heightAfterBlock, String blockName) {
+
+    public BlockAndValidity(Map<Sha256Hash, Integer> blockToHeightMap, Map<Sha256Hash, Block> hashHeaderMap, Block block,
+                            boolean connects, boolean throwsException, Sha256Hash hashChainTipAfterBlock, int heightAfterBlock, String blockName) {
+        super(blockName);
         if (connects && throwsException)
             throw new RuntimeException("A block cannot connect if an exception was thrown while adding it.");
         this.block = block;
+        this.blockHash = block.getHash();
         this.connects = connects;
         this.throwsException = throwsException;
         this.hashChainTipAfterBlock = hashChainTipAfterBlock;
         this.heightAfterBlock = heightAfterBlock;
-        this.blockName = blockName;
-        
+
+        // Keep track of the set of blocks indexed by hash
+        hashHeaderMap.put(block.getHash(), block.cloneAsHeader());
+
         // Double-check that we are always marking any given block at the same height
         Integer height = blockToHeightMap.get(hashChainTipAfterBlock);
         if (height != null)
             Preconditions.checkState(height == heightAfterBlock);
         else
             blockToHeightMap.put(hashChainTipAfterBlock, heightAfterBlock);
+    }
+}
+
+/**
+ * A test which checks the mempool state (ie defined which transactions should be in memory pool
+ */
+class MemoryPoolState extends Rule {
+    Set<InventoryItem> mempool;
+    public MemoryPoolState(Set<InventoryItem> mempool, String ruleName) {
+        super(ruleName);
+        this.mempool = mempool;
+    }
+}
+
+/** An arbitrary rule which the testing client must match */
+class Rule {
+    String ruleName;
+    Rule(String ruleName) {
+        this.ruleName = ruleName;
     }
 }
 
@@ -52,11 +80,13 @@ class TransactionOutPointWithValue {
     }
 }
 
-class BlockAndValidityList {
-    public List<BlockAndValidity> list;
+class RuleList {
+    public List<Rule> list;
     public int maximumReorgBlockCount;
-    public BlockAndValidityList(List<BlockAndValidity> list, int maximumReorgBlockCount) {
+    Map<Sha256Hash, Block> hashHeaderMap;
+    public RuleList(List<Rule> list, Map<Sha256Hash, Block> hashHeaderMap, int maximumReorgBlockCount) {
         this.list = list;
+        this.hashHeaderMap = hashHeaderMap;
         this.maximumReorgBlockCount = maximumReorgBlockCount;
     }
 }
@@ -69,6 +99,8 @@ public class FullBlockTestGenerator {
     
     // Used to double-check that we are always using the right next-height
     private Map<Sha256Hash, Integer> blockToHeightMap = new HashMap<Sha256Hash, Integer>();
+
+    private Map<Sha256Hash, Block> hashHeaderMap = new HashMap<Sha256Hash, Block>();
     
     public FullBlockTestGenerator(NetworkParameters params) {
         this.params = params;
@@ -77,24 +109,24 @@ public class FullBlockTestGenerator {
         Utils.rollMockClock(0); // Set a mock clock for timestamp tests
     }
 
-    public BlockAndValidityList getBlocksToTest(boolean addSigExpensiveBlocks, boolean runLargeReorgs, File blockStorageFile) throws ScriptException, ProtocolException, IOException {
+    public RuleList getBlocksToTest(boolean addSigExpensiveBlocks, boolean runLargeReorgs, File blockStorageFile) throws ScriptException, ProtocolException, IOException {
         final FileOutputStream outStream = blockStorageFile != null ? new FileOutputStream(blockStorageFile) : null;
         
-        List<BlockAndValidity> blocks = new LinkedList<BlockAndValidity>() {
+        List<Rule> blocks = new LinkedList<Rule>() {
             @Override
-            public boolean add(BlockAndValidity element) {
-                if (outStream != null) {
+            public boolean add(Rule element) {
+                if (outStream != null && element instanceof BlockAndValidity) {
                     try {
-                        outStream.write((int) (params.packetMagic >>> 24));
-                        outStream.write((int) (params.packetMagic >>> 16));
-                        outStream.write((int) (params.packetMagic >>> 8));
-                        outStream.write((int) (params.packetMagic >>> 0));
-                        byte[] block = element.block.bitcoinSerialize();
+                        outStream.write((int) (params.getPacketMagic() >>> 24));
+                        outStream.write((int) (params.getPacketMagic() >>> 16));
+                        outStream.write((int) (params.getPacketMagic() >>> 8));
+                        outStream.write((int) (params.getPacketMagic() >>> 0));
+                        byte[] block = ((BlockAndValidity)element).block.bitcoinSerialize();
                         byte[] length = new byte[4];
                         Utils.uint32ToByteArrayBE(block.length, length, 0);
                         outStream.write(Utils.reverseBytes(length));
                         outStream.write(block);
-                        element.block = null;
+                        ((BlockAndValidity)element).block = null;
                     } catch (IOException e) {
                         throw new RuntimeException(e);
                     }
@@ -102,20 +134,20 @@ public class FullBlockTestGenerator {
                 return super.add(element);
             }
         };
-        BlockAndValidityList ret = new BlockAndValidityList(blocks, 10);
+        RuleList ret = new RuleList(blocks, hashHeaderMap, 10);
         
         Queue<TransactionOutPointWithValue> spendableOutputs = new LinkedList<TransactionOutPointWithValue>();
         
         int chainHeadHeight = 1;
-        Block chainHead = params.genesisBlock.createNextBlockWithCoinbase(coinbaseOutKeyPubKey);
-        blocks.add(new BlockAndValidity(blockToHeightMap, chainHead, true, false, chainHead.getHash(), 1, "Initial Block"));
+        Block chainHead = params.getGenesisBlock().createNextBlockWithCoinbase(coinbaseOutKeyPubKey);
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, chainHead, true, false, chainHead.getHash(), 1, "Initial Block"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, chainHead.getTransactions().get(0).getHash()),
                 Utils.toNanoCoins(50, 0), chainHead.getTransactions().get(0).getOutputs().get(0).getScriptPubKey()));
         for (int i = 1; i < params.getSpendableCoinbaseDepth(); i++) {
             chainHead = chainHead.createNextBlockWithCoinbase(coinbaseOutKeyPubKey);
             chainHeadHeight++;
-            blocks.add(new BlockAndValidity(blockToHeightMap, chainHead, true, false, chainHead.getHash(), i+1, "Initial Block chain output generation"));
+            blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, chainHead, true, false, chainHead.getHash(), i+1, "Initial Block chain output generation"));
             spendableOutputs.offer(new TransactionOutPointWithValue(
                     new TransactionOutPoint(params, 0, chainHead.getTransactions().get(0).getHash()),
                     Utils.toNanoCoins(50, 0), chainHead.getTransactions().get(0).getOutputs().get(0).getScriptPubKey()));
@@ -123,7 +155,7 @@ public class FullBlockTestGenerator {
         
         // Start by building a couple of blocks on top of the genesis block.
         Block b1 = createNextBlock(chainHead, chainHeadHeight + 1, spendableOutputs.poll(), null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b1, true, false, b1.getHash(), chainHeadHeight + 1, "b1"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b1, true, false, b1.getHash(), chainHeadHeight + 1, "b1"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b1.getTransactions().get(0).getHash()),
                 b1.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -131,9 +163,9 @@ public class FullBlockTestGenerator {
         
         TransactionOutPointWithValue out1 = spendableOutputs.poll(); Preconditions.checkState(out1 != null);
         Block b2 = createNextBlock(b1, chainHeadHeight + 2, out1, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b2, true, false, b2.getHash(), chainHeadHeight + 2, "b2"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b2, true, false, b2.getHash(), chainHeadHeight + 2, "b2"));
         // Make sure nothing funky happens if we try to re-add b2
-        blocks.add(new BlockAndValidity(blockToHeightMap, b2, true, false, b2.getHash(), chainHeadHeight + 2, "b2"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b2, true, false, b2.getHash(), chainHeadHeight + 2, "b2"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b2.getTransactions().get(0).getHash()),
                 b2.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -148,21 +180,21 @@ public class FullBlockTestGenerator {
         //
         // Nothing should happen at this point. We saw b2 first so it takes priority.
         Block b3 = createNextBlock(b1, chainHeadHeight + 2, out1, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b3, true, false, b2.getHash(), chainHeadHeight + 2, "b3"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b3, true, false, b2.getHash(), chainHeadHeight + 2, "b3"));
         // Make sure nothing breaks if we add b3 twice
-        blocks.add(new BlockAndValidity(blockToHeightMap, b3, true, false, b2.getHash(), chainHeadHeight + 2, "b3"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b3, true, false, b2.getHash(), chainHeadHeight + 2, "b3"));
         // Now we add another block to make the alternative chain longer.
         TransactionOutPointWithValue out2 = spendableOutputs.poll(); Preconditions.checkState(out2 != null);
 
         Block b4 = createNextBlock(b3, chainHeadHeight + 3, out2, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b4, true, false, b4.getHash(), chainHeadHeight + 3, "b4"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b4, true, false, b4.getHash(), chainHeadHeight + 3, "b4"));
         //
         //     genesis -> b1 (0) -> b2 (1)
         //                      \-> b3 (1) -> b4 (2)
         //
         // ... and back to the first chain.
         Block b5 = createNextBlock(b2, chainHeadHeight + 3, out2, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b5, true, false, b4.getHash(), chainHeadHeight + 3, "b5"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b5, true, false, b4.getHash(), chainHeadHeight + 3, "b5"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b5.getTransactions().get(0).getHash()),
                 b5.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -171,7 +203,7 @@ public class FullBlockTestGenerator {
         TransactionOutPointWithValue out3 = spendableOutputs.poll();
         
         Block b6 = createNextBlock(b5, chainHeadHeight + 4, out3, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b6, true, false, b6.getHash(), chainHeadHeight + 4, "b6"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b6, true, false, b6.getHash(), chainHeadHeight + 4, "b6"));
         //
         //     genesis -> b1 (0) -> b2 (1) -> b5 (2) -> b6 (3)
         //                      \-> b3 (1) -> b4 (2)
@@ -183,12 +215,12 @@ public class FullBlockTestGenerator {
         //                      \-> b3 (1) -> b4 (2)
         //
         Block b7 = createNextBlock(b5, chainHeadHeight + 5, out2, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b7, true, false, b6.getHash(), chainHeadHeight + 4, "b7"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b7, true, false, b6.getHash(), chainHeadHeight + 4, "b7"));
         
         TransactionOutPointWithValue out4 = spendableOutputs.poll();
 
         Block b8 = createNextBlock(b7, chainHeadHeight + 6, out4, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b8, false, true, b6.getHash(), chainHeadHeight + 4, "b8"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b8, false, true, b6.getHash(), chainHeadHeight + 4, "b8"));
         
         // Try to create a block that has too much fee
         //     genesis -> b1 (0) -> b2 (1) -> b5 (2) -> b6 (3)
@@ -196,7 +228,7 @@ public class FullBlockTestGenerator {
         //                      \-> b3 (1) -> b4 (2)
         //
         Block b9 = createNextBlock(b6, chainHeadHeight + 5, out4, BigInteger.valueOf(1));
-        blocks.add(new BlockAndValidity(blockToHeightMap, b9, false, true, b6.getHash(), chainHeadHeight + 4, "b9"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b9, false, true, b6.getHash(), chainHeadHeight + 4, "b9"));
         
         // Create a fork that ends in a block with too much fee (the one that causes the reorg)
         //     genesis -> b1 (0) -> b2 (1) -> b5 (2) -> b6  (3)
@@ -204,10 +236,10 @@ public class FullBlockTestGenerator {
         //                      \-> b3 (1) -> b4 (2)
         //
         Block b10 = createNextBlock(b5, chainHeadHeight + 4, out3, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b10, true, false, b6.getHash(), chainHeadHeight + 4, "b10"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b10, true, false, b6.getHash(), chainHeadHeight + 4, "b10"));
         
         Block b11 = createNextBlock(b10, chainHeadHeight + 5, out4, BigInteger.valueOf(1));
-        blocks.add(new BlockAndValidity(blockToHeightMap, b11, false, true, b6.getHash(), chainHeadHeight + 4, "b11"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b11, false, true, b6.getHash(), chainHeadHeight + 4, "b11"));
         
         // Try again, but with a valid fork first
         //     genesis -> b1 (0) -> b2 (1) -> b5 (2) -> b6  (3)
@@ -222,9 +254,9 @@ public class FullBlockTestGenerator {
                 b12.getTransactions().get(0).getOutputs().get(0).getScriptPubKey()));
         
         Block b13 = createNextBlock(b12, chainHeadHeight + 5, out4, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b13, false, false, b6.getHash(), chainHeadHeight + 4, "b13"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b13, false, false, b6.getHash(), chainHeadHeight + 4, "b13"));
         // Make sure we dont die if an orphan gets added twice
-        blocks.add(new BlockAndValidity(blockToHeightMap, b13, false, false, b6.getHash(), chainHeadHeight + 4, "b13"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b13, false, false, b6.getHash(), chainHeadHeight + 4, "b13"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b13.getTransactions().get(0).getHash()),
                 b13.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -236,11 +268,11 @@ public class FullBlockTestGenerator {
         // This will be "validly" added, though its actually invalid, it will just be marked orphan
         // and will be discarded when an attempt is made to reorg to it.
         // TODO: Use a WeakReference to check that it is freed properly after the reorg
-        blocks.add(new BlockAndValidity(blockToHeightMap, b14, false, false, b6.getHash(), chainHeadHeight + 4, "b14"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b14, false, false, b6.getHash(), chainHeadHeight + 4, "b14"));
         // Make sure we dont die if an orphan gets added twice
-        blocks.add(new BlockAndValidity(blockToHeightMap, b14, false, false, b6.getHash(), chainHeadHeight + 4, "b14"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b14, false, false, b6.getHash(), chainHeadHeight + 4, "b14"));
         
-        blocks.add(new BlockAndValidity(blockToHeightMap, b12, false, true, b13.getHash(), chainHeadHeight + 5, "b12"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b12, false, true, b13.getHash(), chainHeadHeight + 5, "b12"));
         
         // Add a block with MAX_BLOCK_SIGOPS and one with one more sigop
         //     genesis -> b1 (0) -> b2 (1) -> b5 (2) -> b6  (3)
@@ -264,7 +296,7 @@ public class FullBlockTestGenerator {
         }
         b15.solve();
         
-        blocks.add(new BlockAndValidity(blockToHeightMap, b15, true, false, b15.getHash(), chainHeadHeight + 6, "b15"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b15, true, false, b15.getHash(), chainHeadHeight + 6, "b15"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b15.getTransactions().get(0).getHash()),
                 b15.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -289,7 +321,7 @@ public class FullBlockTestGenerator {
         }
         b16.solve();
         
-        blocks.add(new BlockAndValidity(blockToHeightMap, b16, false, true, b15.getHash(), chainHeadHeight + 6, "b16"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b16, false, true, b15.getHash(), chainHeadHeight + 6, "b16"));
                 
         // Attempt to spend a transaction created on a different fork
         //     genesis -> b1 (0) -> b2 (1) -> b5 (2) -> b6  (3)
@@ -306,7 +338,7 @@ public class FullBlockTestGenerator {
             b17.addTransaction(tx);
         }
         b17.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b17, false, true, b15.getHash(), chainHeadHeight + 6, "b17"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b17, false, true, b15.getHash(), chainHeadHeight + 6, "b17"));
         
         // Attempt to spend a transaction created on a different fork (on a fork this time)
         //     genesis -> b1 (0) -> b2 (1) -> b5 (2) -> b6  (3)
@@ -324,10 +356,10 @@ public class FullBlockTestGenerator {
             b18.addTransaction(tx);
         }
         b18.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b18, true, false, b15.getHash(), chainHeadHeight + 6, "b17"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b18, true, false, b15.getHash(), chainHeadHeight + 6, "b17"));
         
         Block b19 = createNextBlock(b18, chainHeadHeight + 7, out6, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b19, false, true, b15.getHash(), chainHeadHeight + 6, "b19"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b19, false, true, b15.getHash(), chainHeadHeight + 6, "b19"));
         
         // Attempt to spend a coinbase at depth too low
         //     genesis -> b1 (0) -> b2 (1) -> b5 (2) -> b6  (3)
@@ -337,7 +369,7 @@ public class FullBlockTestGenerator {
         TransactionOutPointWithValue out7 = spendableOutputs.poll();
 
         Block b20 = createNextBlock(b15, chainHeadHeight + 7, out7, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b20, false, true, b15.getHash(), chainHeadHeight + 6, "b20"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b20, false, true, b15.getHash(), chainHeadHeight + 6, "b20"));
         
         // Attempt to spend a coinbase at depth too low (on a fork this time)
         //     genesis -> b1 (0) -> b2 (1) -> b5 (2) -> b6  (3)
@@ -346,9 +378,9 @@ public class FullBlockTestGenerator {
         //                      \-> b3 (1) -> b4 (2)
         //
         Block b21 = createNextBlock(b13, chainHeadHeight + 6, out6, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b21, true, false, b15.getHash(), chainHeadHeight + 6, "b21"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b21, true, false, b15.getHash(), chainHeadHeight + 6, "b21"));
         Block b22 = createNextBlock(b21, chainHeadHeight + 7, out5, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b22, false, true, b15.getHash(), chainHeadHeight + 6, "b22"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b22, false, true, b15.getHash(), chainHeadHeight + 6, "b22"));
         
         // Create a block on either side of MAX_BLOCK_SIZE and make sure its accepted/rejected
         //     genesis -> b1 (0) -> b2 (1) -> b5 (2) -> b6  (3)
@@ -369,7 +401,7 @@ public class FullBlockTestGenerator {
             b23.addTransaction(tx);
         }
         b23.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b23, true, false, b23.getHash(), chainHeadHeight + 7, "b23"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b23, true, false, b23.getHash(), chainHeadHeight + 7, "b23"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b23.getTransactions().get(0).getHash()),
                 b23.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -388,11 +420,11 @@ public class FullBlockTestGenerator {
             b24.addTransaction(tx);
         }
         b24.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b24, false, true, b23.getHash(), chainHeadHeight + 7, "b24"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b24, false, true, b23.getHash(), chainHeadHeight + 7, "b24"));
         
         // Extend the b24 chain to make sure bitcoind isn't accepting b24
         Block b25 = createNextBlock(b24, chainHeadHeight + 8, out7, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b25, false, false, b23.getHash(), chainHeadHeight + 7, "b25"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b25, false, false, b23.getHash(), chainHeadHeight + 7, "b25"));
         
         // Create blocks with a coinbase input script size out of range
         //     genesis -> b1 (0) -> b2 (1) -> b5 (2) -> b6  (3)
@@ -405,11 +437,11 @@ public class FullBlockTestGenerator {
         b26.getTransactions().get(0).getInputs().get(0).setScriptBytes(new byte[] {0});
         b26.setMerkleRoot(null);
         b26.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b26, false, true, b23.getHash(), chainHeadHeight + 7, "b26"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b26, false, true, b23.getHash(), chainHeadHeight + 7, "b26"));
         
         // Extend the b26 chain to make sure bitcoind isn't accepting b26
         Block b27 = createNextBlock(b26, chainHeadHeight + 8, out7, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b27, false, false, b23.getHash(), chainHeadHeight + 7, "b27"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b27, false, false, b23.getHash(), chainHeadHeight + 7, "b27"));
         
         Block b28 = createNextBlock(b15, chainHeadHeight + 7, out6, null);
         {
@@ -419,11 +451,11 @@ public class FullBlockTestGenerator {
         }
         b28.setMerkleRoot(null);
         b28.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b28, false, true, b23.getHash(), chainHeadHeight + 7, "b28"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b28, false, true, b23.getHash(), chainHeadHeight + 7, "b28"));
         
         // Extend the b28 chain to make sure bitcoind isn't accepting b28
         Block b29 = createNextBlock(b28, chainHeadHeight + 8, out7, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b29, false, false, b23.getHash(), chainHeadHeight + 7, "b29"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b29, false, false, b23.getHash(), chainHeadHeight + 7, "b29"));
         
         Block b30 = createNextBlock(b23, chainHeadHeight + 8, out7, null);
         {
@@ -433,7 +465,7 @@ public class FullBlockTestGenerator {
         }
         b30.setMerkleRoot(null);
         b30.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b30, true, false, b30.getHash(), chainHeadHeight + 8, "b30"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b30, true, false, b30.getHash(), chainHeadHeight + 8, "b30"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b30.getTransactions().get(0).getHash()),
                 b30.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -465,7 +497,7 @@ public class FullBlockTestGenerator {
         }
         b31.solve();
         
-        blocks.add(new BlockAndValidity(blockToHeightMap, b31, true, false, b31.getHash(), chainHeadHeight + 9, "b31"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b31, true, false, b31.getHash(), chainHeadHeight + 9, "b31"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b31.getTransactions().get(0).getHash()),
                 b31.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -492,7 +524,7 @@ public class FullBlockTestGenerator {
         }
         b32.solve();
         
-        blocks.add(new BlockAndValidity(blockToHeightMap, b32, false, true, b31.getHash(), chainHeadHeight + 9, "b32"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b32, false, true, b31.getHash(), chainHeadHeight + 9, "b32"));
         
         
         Block b33 = createNextBlock(b31, chainHeadHeight + 10, out9, null);
@@ -512,7 +544,7 @@ public class FullBlockTestGenerator {
         }
         b33.solve();
         
-        blocks.add(new BlockAndValidity(blockToHeightMap, b33, true, false, b33.getHash(), chainHeadHeight + 10, "b33"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b33, true, false, b33.getHash(), chainHeadHeight + 10, "b33"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b33.getTransactions().get(0).getHash()),
                 b33.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -539,7 +571,7 @@ public class FullBlockTestGenerator {
         }
         b34.solve();
         
-        blocks.add(new BlockAndValidity(blockToHeightMap, b34, false, true, b33.getHash(), chainHeadHeight + 10, "b34"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b34, false, true, b33.getHash(), chainHeadHeight + 10, "b34"));
         
         
         Block b35 = createNextBlock(b33, chainHeadHeight + 11, out10, null);
@@ -559,7 +591,7 @@ public class FullBlockTestGenerator {
         }
         b35.solve();
         
-        blocks.add(new BlockAndValidity(blockToHeightMap, b35, true, false, b35.getHash(), chainHeadHeight + 11, "b35"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b35, true, false, b35.getHash(), chainHeadHeight + 11, "b35"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b35.getTransactions().get(0).getHash()),
                 b35.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -584,7 +616,7 @@ public class FullBlockTestGenerator {
         }
         b36.solve();
         
-        blocks.add(new BlockAndValidity(blockToHeightMap, b36, false, true, b35.getHash(), chainHeadHeight + 11, "b36"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b36, false, true, b35.getHash(), chainHeadHeight + 11, "b36"));
         
         // Check spending of a transaction in a block which failed to connect
         // (test block store transaction abort handling, not that it should get this far if that's broken...)
@@ -601,7 +633,7 @@ public class FullBlockTestGenerator {
             b37.addTransaction(tx);
         }
         b37.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b37, false, true, b35.getHash(), chainHeadHeight + 11, "b37"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b37, false, true, b35.getHash(), chainHeadHeight + 11, "b37"));
         
         Block b38 = createNextBlock(b35, chainHeadHeight + 12, out11, null);
         {
@@ -614,7 +646,7 @@ public class FullBlockTestGenerator {
             b38.addTransaction(tx);
         }
         b38.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b38, false, true, b35.getHash(), chainHeadHeight + 11, "b38"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b38, false, true, b35.getHash(), chainHeadHeight + 11, "b38"));
         
         // Check P2SH SigOp counting
         // 13 (4) -> b15 (5) -> b23 (6) -> b30 (7) -> b31 (8) -> b33 (9) -> b35 (10) -> b39 (11) -> b41 (12)
@@ -684,7 +716,7 @@ public class FullBlockTestGenerator {
             }
         }
         b39.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b39, true, false, b39.getHash(), chainHeadHeight + 12, "b39"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b39, true, false, b39.getHash(), chainHeadHeight + 12, "b39"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b39.getTransactions().get(0).getHash()),
                 b39.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -716,7 +748,7 @@ public class FullBlockTestGenerator {
 
                 if (scriptSig == null) {
                     // Exploit the SigHash.SINGLE bug to avoid having to make more than one signature
-                    Sha256Hash hash = tx.hashTransactionForSignature(1, b39p2shScriptPubKey, SigHash.SINGLE, false);
+                    Sha256Hash hash = tx.hashForSignature(1, b39p2shScriptPubKey, SigHash.SINGLE, false);
 
                     // Sign input
                     try {
@@ -752,7 +784,7 @@ public class FullBlockTestGenerator {
             b40.addTransaction(tx);
         }
         b40.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b40, false, true, b39.getHash(), chainHeadHeight + 12, "b40"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b40, false, true, b39.getHash(), chainHeadHeight + 12, "b40"));
         
         Block b41 = null;
         if (addSigExpensiveBlocks) {
@@ -785,7 +817,7 @@ public class FullBlockTestGenerator {
 
                     if (scriptSig == null) {
                         // Exploit the SigHash.SINGLE bug to avoid having to make more than one signature
-                        Sha256Hash hash = tx.hashTransactionForSignature(1,
+                        Sha256Hash hash = tx.hashForSignature(1,
                                 b39p2shScriptPubKey, SigHash.SINGLE, false);
 
                         // Sign input
@@ -829,7 +861,7 @@ public class FullBlockTestGenerator {
                 b41.addTransaction(tx);
             }
             b41.solve();
-            blocks.add(new BlockAndValidity(blockToHeightMap, b41, true, false, b41.getHash(), chainHeadHeight + 13, "b41"));
+            blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b41, true, false, b41.getHash(), chainHeadHeight + 13, "b41"));
         }
         
         // Fork off of b39 to create a constant base again
@@ -837,7 +869,7 @@ public class FullBlockTestGenerator {
         //                                                                 \-> b41 (12)
         //
         Block b42 = createNextBlock(b39, chainHeadHeight + 13, out12, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b42, true, false, b41 == null ? b42.getHash() : b41.getHash(), chainHeadHeight + 13, "b42"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b42, true, false, b41 == null ? b42.getHash() : b41.getHash(), chainHeadHeight + 13, "b42"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b42.getTransactions().get(0).getHash()),
                 b42.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -846,7 +878,7 @@ public class FullBlockTestGenerator {
         TransactionOutPointWithValue out13 = spendableOutputs.poll();
         
         Block b43 = createNextBlock(b42, chainHeadHeight + 14, out13, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b43, true, false, b43.getHash(), chainHeadHeight + 14, "b43"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b43, true, false, b43.getHash(), chainHeadHeight + 14, "b43"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b43.getTransactions().get(0).getHash()),
                 b43.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -878,7 +910,7 @@ public class FullBlockTestGenerator {
             b44.setTime(b43.getTimeSeconds() + 1);
         }
         b44.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b44, true, false, b44.getHash(), chainHeadHeight + 15, "b44"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b44, true, false, b44.getHash(), chainHeadHeight + 15, "b44"));
         
         TransactionOutPointWithValue out15 = spendableOutputs.poll();
         
@@ -906,7 +938,7 @@ public class FullBlockTestGenerator {
             b45.setTime(b44.getTimeSeconds() + 1);
         }
         b45.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b45, false, true, b44.getHash(), chainHeadHeight + 15, "b45"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b45, false, true, b44.getHash(), chainHeadHeight + 15, "b45"));
         
         // A block with no txn
         Block b46 = new Block(params);
@@ -919,7 +951,7 @@ public class FullBlockTestGenerator {
             b46.setTime(b44.getTimeSeconds() + 1);
         }
         b46.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b46, false, true, b44.getHash(), chainHeadHeight + 15, "b46"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b46, false, true, b44.getHash(), chainHeadHeight + 15, "b46"));
         
         // A block with invalid work
         Block b47 = createNextBlock(b44, chainHeadHeight + 16, out15, null);
@@ -938,19 +970,19 @@ public class FullBlockTestGenerator {
                 throw new RuntimeException(e); // Cannot happen.
             }
         }
-        blocks.add(new BlockAndValidity(blockToHeightMap, b47, false, true, b44.getHash(), chainHeadHeight + 15, "b47"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b47, false, true, b44.getHash(), chainHeadHeight + 15, "b47"));
         
         // Block with timestamp > 2h in the future
         Block b48 = createNextBlock(b44, chainHeadHeight + 16, out15, null);
         b48.setTime(Utils.now().getTime() / 1000 + 60*60*3);
         b48.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b48, false, true, b44.getHash(), chainHeadHeight + 15, "b48"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b48, false, true, b44.getHash(), chainHeadHeight + 15, "b48"));
         
         // Block with invalid merkle hash
         Block b49 = createNextBlock(b44, chainHeadHeight + 16, out15, null);
         b49.setMerkleRoot(Sha256Hash.ZERO_HASH);
         b49.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b49, false, true, b44.getHash(), chainHeadHeight + 15, "b49"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b49, false, true, b44.getHash(), chainHeadHeight + 15, "b49"));
         
         // Block with incorrect POW limit
         Block b50 = createNextBlock(b44, chainHeadHeight + 16, out15, null);
@@ -960,7 +992,7 @@ public class FullBlockTestGenerator {
             b50.setDifficultyTarget(diffTarget);
         }
         b50.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b50, false, true, b44.getHash(), chainHeadHeight + 15, "b50"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b50, false, true, b44.getHash(), chainHeadHeight + 15, "b50"));
         
         // A block with two coinbase txn
         Block b51 = createNextBlock(b44, chainHeadHeight + 16, out15, null);
@@ -971,7 +1003,7 @@ public class FullBlockTestGenerator {
             b51.addTransaction(coinbase, false);
         }
         b51.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b51, false, true, b44.getHash(), chainHeadHeight + 15, "b51"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b51, false, true, b44.getHash(), chainHeadHeight + 15, "b51"));
         
         // A block with duplicate txn
         Block b52 = createNextBlock(b44, chainHeadHeight + 16, out15, null);
@@ -985,7 +1017,7 @@ public class FullBlockTestGenerator {
             b52.addTransaction(tx);
         }
         b52.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b52, false, true, b44.getHash(), chainHeadHeight + 15, "b52"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b52, false, true, b44.getHash(), chainHeadHeight + 15, "b52"));
         
         // Test block timestamp
         //  -> b31 (8) -> b33 (9) -> b35 (10) -> b39 (11) -> b42 (12) -> b43 (13) -> b53 (14) -> b55 (15)
@@ -993,7 +1025,7 @@ public class FullBlockTestGenerator {
         //                                                                       \-> b44 (14)
         //
         Block b53 = createNextBlock(b43, chainHeadHeight + 15, out14, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b53, true, false, b44.getHash(), chainHeadHeight + 15, "b53"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b53, true, false, b44.getHash(), chainHeadHeight + 15, "b53"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b53.getTransactions().get(0).getHash()),
                 b53.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -1003,13 +1035,13 @@ public class FullBlockTestGenerator {
         Block b54 = createNextBlock(b53, chainHeadHeight + 16, out15, null);
         b54.setTime(b35.getTimeSeconds() - 1);
         b54.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b54, false, true, b44.getHash(), chainHeadHeight + 15, "b54"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b54, false, true, b44.getHash(), chainHeadHeight + 15, "b54"));
         
         // Block with valid timestamp
         Block b55 = createNextBlock(b53, chainHeadHeight + 16, out15, null);
         b55.setTime(b35.getTimeSeconds());
         b55.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b55, true, false, b55.getHash(), chainHeadHeight + 16, "b55"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b55, true, false, b55.getHash(), chainHeadHeight + 16, "b55"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b55.getTransactions().get(0).getHash()),
                 b55.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -1041,9 +1073,9 @@ public class FullBlockTestGenerator {
         }
         b56.addTransaction(b56txToDuplicate);
         Preconditions.checkState(b56.getHash().equals(b57.getHash()));
-        blocks.add(new BlockAndValidity(blockToHeightMap, b56, false, true, b55.getHash(), chainHeadHeight + 16, "b56"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b56, false, true, b55.getHash(), chainHeadHeight + 16, "b56"));
         
-        blocks.add(new BlockAndValidity(blockToHeightMap, b57, true, false, b57.getHash(), chainHeadHeight + 17, "b57"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b57, true, false, b57.getHash(), chainHeadHeight + 17, "b57"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b57.getTransactions().get(0).getHash()),
                 b57.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -1065,7 +1097,7 @@ public class FullBlockTestGenerator {
             b58.addTransaction(tx);
         }
         b58.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b58, false, true, b57.getHash(), chainHeadHeight + 17, "b58"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b58, false, true, b57.getHash(), chainHeadHeight + 17, "b58"));
         
         // tx with output value > input value out of range
         Block b59 = createNextBlock(b57, chainHeadHeight + 18, out17, null);
@@ -1078,10 +1110,10 @@ public class FullBlockTestGenerator {
             b59.addTransaction(tx);
         }
         b59.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b59, false, true, b57.getHash(), chainHeadHeight + 17, "b59"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b59, false, true, b57.getHash(), chainHeadHeight + 17, "b59"));
         
         Block b60 = createNextBlock(b57, chainHeadHeight + 18, out17, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b60, true, false, b60.getHash(), chainHeadHeight + 18, "b60"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b60, true, false, b60.getHash(), chainHeadHeight + 18, "b60"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b60.getTransactions().get(0).getHash()),
                 b60.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -1102,7 +1134,7 @@ public class FullBlockTestGenerator {
             Preconditions.checkState(b61.getTransactions().get(0).equals(b60.getTransactions().get(0)));
         }
         b61.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b61, false, true, b60.getHash(), chainHeadHeight + 18, "b61"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b61, false, true, b60.getHash(), chainHeadHeight + 18, "b61"));
         
         // Test tx.isFinal is properly rejected (not an exhaustive tx.isFinal test, that should be in data-driven transaction tests)
         // -> b39 (11) -> b42 (12) -> b43 (13) -> b53 (14) -> b55 (15) -> b57 (16) -> b60 (17)
@@ -1118,7 +1150,7 @@ public class FullBlockTestGenerator {
             Preconditions.checkState(!tx.isFinal(chainHeadHeight + 17, b62.getTimeSeconds()));
         }
         b62.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b62, false, true, b60.getHash(), chainHeadHeight + 18, "b62"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b62, false, true, b60.getHash(), chainHeadHeight + 18, "b62"));
         
         // Test a non-final coinbase is also rejected
         // -> b39 (11) -> b42 (12) -> b43 (13) -> b53 (14) -> b55 (15) -> b57 (16) -> b60 (17)
@@ -1131,7 +1163,7 @@ public class FullBlockTestGenerator {
             Preconditions.checkState(!b63.getTransactions().get(0).isFinal(chainHeadHeight + 17, b63.getTimeSeconds()));
         }
         b63.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b63, false, true, b60.getHash(), chainHeadHeight + 18, "b63"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b63, false, true, b60.getHash(), chainHeadHeight + 18, "b63"));
         
         // Check that a block which is (when properly encoded) <= MAX_BLOCK_SIZE is accepted
         // Even when it is encoded with varints that make its encoded size actually > MAX_BLOCK_SIZE
@@ -1172,7 +1204,7 @@ public class FullBlockTestGenerator {
             Preconditions.checkState(Arrays.equals(stream.toByteArray(), b64.bitcoinSerialize()));
             Preconditions.checkState(b64.getOptimalEncodingMessageSize() == b64Created.getMessageSize());
         }
-        blocks.add(new BlockAndValidity(blockToHeightMap, b64, true, false, b64.getHash(), chainHeadHeight + 19, "b64"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b64, true, false, b64.getHash(), chainHeadHeight + 19, "b64"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b64.getTransactions().get(0).getHash()),
                 b64.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -1196,7 +1228,7 @@ public class FullBlockTestGenerator {
             b65.addTransaction(tx2);
         }
         b65.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b65, true, false, b65.getHash(), chainHeadHeight + 20, "b65"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b65, true, false, b65.getHash(), chainHeadHeight + 20, "b65"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b65.getTransactions().get(0).getHash()),
                 b65.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -1221,7 +1253,7 @@ public class FullBlockTestGenerator {
             b66.addTransaction(tx1);
         }
         b66.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b66, false, true, b65.getHash(), chainHeadHeight + 20, "b66"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b66, false, true, b65.getHash(), chainHeadHeight + 20, "b66"));
         
         // Attempt to double-spend a transaction created in a block
         // -> b43 (13) -> b53 (14) -> b55 (15) -> b57 (16) -> b60 (17) -> b64 (18) -> b65 (19)
@@ -1245,7 +1277,7 @@ public class FullBlockTestGenerator {
             b67.addTransaction(tx3);
         }
         b67.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b67, false, true, b65.getHash(), chainHeadHeight + 20, "b67"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b67, false, true, b65.getHash(), chainHeadHeight + 20, "b67"));
         
         // A few more tests of block subsidy
         // -> b43 (13) -> b53 (14) -> b55 (15) -> b57 (16) -> b60 (17) -> b64 (18) -> b65 (19) -> b69 (20)
@@ -1259,7 +1291,7 @@ public class FullBlockTestGenerator {
             b68.addTransaction(tx);
         }
         b68.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b68, false, true, b65.getHash(), chainHeadHeight + 20, "b68"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b68, false, true, b65.getHash(), chainHeadHeight + 20, "b68"));
         
         Block b69 = createNextBlock(b65, chainHeadHeight + 21, null, BigInteger.TEN);
         {
@@ -1269,7 +1301,12 @@ public class FullBlockTestGenerator {
             b69.addTransaction(tx);
         }
         b69.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b69, true, false, b69.getHash(), chainHeadHeight + 21, "b69"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b69, true, false, b69.getHash(), chainHeadHeight + 21, "b69"));
+
+        spendableOutputs.offer(new TransactionOutPointWithValue(
+                new TransactionOutPoint(params, 0, b69.getTransactions().get(0).getHash()),
+                b69.getTransactions().get(0).getOutputs().get(0).getValue(),
+                b69.getTransactions().get(0).getOutputs().get(0).getScriptPubKey()));
         
         // Test spending the outpoint of a non-existent transaction
         // -> b53 (14) -> b55 (15) -> b57 (16) -> b60 (17) -> b64 (18) -> b65 (19) -> b69 (20)
@@ -1285,7 +1322,7 @@ public class FullBlockTestGenerator {
             b70.addTransaction(tx);
         }
         b70.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b70, false, true, b69.getHash(), chainHeadHeight + 21, "b70"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b70, false, true, b69.getHash(), chainHeadHeight + 21, "b70"));
         
         // Test accepting an invalid block which has the same hash as a valid one (via merkle tree tricks)
         // -> b53 (14) -> b55 (15) -> b57 (16) -> b60 (17) -> b64 (18) -> b65 (19) -> b69 (20) -> b71 (21)
@@ -1305,8 +1342,8 @@ public class FullBlockTestGenerator {
         Block b71 = new Block(params, b72.bitcoinSerialize());
         b71.addTransaction(b72.getTransactions().get(2));
         Preconditions.checkState(b71.getHash().equals(b72.getHash()));
-        blocks.add(new BlockAndValidity(blockToHeightMap, b71, false, true, b69.getHash(), chainHeadHeight + 21, "b71"));
-        blocks.add(new BlockAndValidity(blockToHeightMap, b72, true, false, b72.getHash(), chainHeadHeight + 22, "b72"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b71, false, true, b69.getHash(), chainHeadHeight + 21, "b71"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b72, true, false, b72.getHash(), chainHeadHeight + 22, "b72"));
         
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b72.getTransactions().get(0).getHash()),
@@ -1338,7 +1375,7 @@ public class FullBlockTestGenerator {
             b73.addTransaction(tx);
         }
         b73.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b73, false, true, b72.getHash(), chainHeadHeight + 22, "b73"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b73, false, true, b72.getHash(), chainHeadHeight + 22, "b73"));
 
         Block b74 = createNextBlock(b72, chainHeadHeight + 23, out22, null);
         {
@@ -1362,7 +1399,7 @@ public class FullBlockTestGenerator {
             b74.addTransaction(tx);
         }
         b74.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b74, false, true, b72.getHash(), chainHeadHeight + 22, "b74"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b74, false, true, b72.getHash(), chainHeadHeight + 22, "b74"));
 
         Block b75 = createNextBlock(b72, chainHeadHeight + 23, out22, null);
         {
@@ -1386,7 +1423,7 @@ public class FullBlockTestGenerator {
             b75.addTransaction(tx);
         }
         b75.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b75, true, false, b75.getHash(), chainHeadHeight + 23, "b75"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b75, true, false, b75.getHash(), chainHeadHeight + 23, "b75"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b75.getTransactions().get(0).getHash()),
                 b75.getTransactions().get(0).getOutputs().get(0).getValue(),
@@ -1413,35 +1450,126 @@ public class FullBlockTestGenerator {
             b76.addTransaction(tx);
         }
         b76.solve();
-        blocks.add(new BlockAndValidity(blockToHeightMap, b76, true, false, b76.getHash(), chainHeadHeight + 24, "b76"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b76, true, false, b76.getHash(), chainHeadHeight + 24, "b76"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b76.getTransactions().get(0).getHash()),
                 b76.getTransactions().get(0).getOutputs().get(0).getValue(),
                 b76.getTransactions().get(0).getOutputs().get(0).getScriptPubKey()));
 
+        // Test transaction resurrection
+        // -> b77 (24) -> b78 (25) -> b79 (26)
+        //            \-> b80 (25) -> b81 (26) -> b82 (27)
+        // b78 creates a tx, which is spent in b79. after b82, both should be in mempool
+        //
+        TransactionOutPointWithValue out24 = spendableOutputs.poll();  Preconditions.checkState(out24 != null);
+        TransactionOutPointWithValue out25 = spendableOutputs.poll();  Preconditions.checkState(out25 != null);
+        TransactionOutPointWithValue out26 = spendableOutputs.poll();  Preconditions.checkState(out26 != null);
+        TransactionOutPointWithValue out27 = spendableOutputs.poll();  Preconditions.checkState(out27 != null);
+
+        Block b77 = createNextBlock(b76, chainHeadHeight + 25, out24, null);
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b77, true, false, b77.getHash(), chainHeadHeight + 25, "b77"));
+
+        Block b78 = createNextBlock(b77, chainHeadHeight + 26, out25, null);
+        Transaction b78tx = new Transaction(params);
+        {
+            b78tx.addOutput(new TransactionOutput(params, b78tx, BigInteger.ZERO, new byte[]{OP_TRUE}));
+            addOnlyInputToTransaction(b78tx, new TransactionOutPointWithValue(
+                    new TransactionOutPoint(params, 1, b77.getTransactions().get(1).getHash()),
+                    BigInteger.valueOf(1), b77.getTransactions().get(1).getOutputs().get(1).getScriptPubKey()));
+            b78.addTransaction(b78tx);
+        }
+        b78.solve();
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b78, true, false, b78.getHash(), chainHeadHeight + 26, "b78"));
+
+        Block b79 = createNextBlock(b78, chainHeadHeight + 27, out26, null);
+        Transaction b79tx = new Transaction(params);
+        {
+            b79tx.addOutput(new TransactionOutput(params, b79tx, BigInteger.ZERO, new byte[]{OP_TRUE}));
+            b79tx.addInput(new TransactionInput(params, b79tx, new byte[]{OP_TRUE}, new TransactionOutPoint(params, 0, b78tx.getHash())));
+            b79.addTransaction(b79tx);
+        }
+        b79.solve();
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b79, true, false, b79.getHash(), chainHeadHeight + 27, "b79"));
+
+        blocks.add(new MemoryPoolState(new HashSet<InventoryItem>(), "post-b79 empty mempool"));
+
+        Block b80 = createNextBlock(b77, chainHeadHeight + 26, out25, null);
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b80, true, false, b79.getHash(), chainHeadHeight + 27, "b80"));
+        spendableOutputs.offer(new TransactionOutPointWithValue(
+                new TransactionOutPoint(params, 0, b80.getTransactions().get(0).getHash()),
+                b80.getTransactions().get(0).getOutputs().get(0).getValue(),
+                b80.getTransactions().get(0).getOutputs().get(0).getScriptPubKey()));
+
+        Block b81 = createNextBlock(b80, chainHeadHeight + 27, out26, null);
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b81, true, false, b79.getHash(), chainHeadHeight + 27, "b81"));
+        spendableOutputs.offer(new TransactionOutPointWithValue(
+                new TransactionOutPoint(params, 0, b81.getTransactions().get(0).getHash()),
+                b81.getTransactions().get(0).getOutputs().get(0).getValue(),
+                b81.getTransactions().get(0).getOutputs().get(0).getScriptPubKey()));
+
+        Block b82 = createNextBlock(b81, chainHeadHeight + 28, out27, null);
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b82, true, false, b82.getHash(), chainHeadHeight + 28, "b82"));
+        spendableOutputs.offer(new TransactionOutPointWithValue(
+                new TransactionOutPoint(params, 0, b82.getTransactions().get(0).getHash()),
+                b82.getTransactions().get(0).getOutputs().get(0).getValue(),
+                b82.getTransactions().get(0).getOutputs().get(0).getScriptPubKey()));
+
+        HashSet<InventoryItem> post82Mempool = new HashSet<InventoryItem>();
+        post82Mempool.add(new InventoryItem(InventoryItem.Type.Transaction, b78tx.getHash()));
+        post82Mempool.add(new InventoryItem(InventoryItem.Type.Transaction, b79tx.getHash()));
+        blocks.add(new MemoryPoolState(post82Mempool, "post-b82 tx resurrection"));
+
+        // Test invalid opcodes in dead execution paths.
+        // -> b81 (26) -> b82 (27) -> b83 (28)
+        // b83 creates a tx which contains a transaction script with an invalid opcode in a dead execution path:
+        // OP_FALSE OP_IF OP_INVALIDOPCODE OP_ELSE OP_TRUE OP_ENDIF
+        //
+        TransactionOutPointWithValue out28 = spendableOutputs.poll();  Preconditions.checkState(out28 != null);
+
+        Block b83 = createNextBlock(b82, chainHeadHeight + 29, null, null);
+        {
+            Transaction tx1 = new Transaction(params);
+            tx1.addOutput(new TransactionOutput(params, tx1, out28.value,
+                    new byte[]{OP_IF, (byte) OP_INVALIDOPCODE, OP_ELSE, OP_TRUE, OP_ENDIF}));
+            addOnlyInputToTransaction(tx1, out28, 0);
+            b83.addTransaction(tx1);
+            Transaction tx2 = new Transaction(params);
+            tx2.addOutput(new TransactionOutput(params, tx2, BigInteger.ZERO, new byte[]{OP_TRUE}));
+            tx2.addInput(new TransactionInput(params, tx2, new byte[]{OP_FALSE},
+                    new TransactionOutPoint(params, 0, tx1.getHash())));
+            b83.addTransaction(tx2);
+        }
+        b83.solve();
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b83, true, false, b83.getHash(), chainHeadHeight + 29, "b83"));
+        spendableOutputs.offer(new TransactionOutPointWithValue(
+                new TransactionOutPoint(params, 0, b83.getTransactions().get(0).getHash()),
+                b83.getTransactions().get(0).getOutputs().get(0).getValue(),
+                b83.getTransactions().get(0).getOutputs().get(0).getScriptPubKey()));
+
         // The remaining tests arent designed to fit in the standard flow, and thus must always come last
         // Add new tests here.
-        
+        //TODO: Explicitly address MoneyRange() checks
+
         // Test massive reorgs (in terms of tx count)
         // -> b60 (17) -> b64 (18) -> b65 (19) -> b69 (20) -> b72 (21) -> b1001 (22) -> lots of outputs -> lots of spends
         // Reorg back to:
         // -> b60 (17) -> b64 (18) -> b65 (19) -> b69 (20) -> b72 (21) -> b1001 (22) -> empty blocks
         //
-        TransactionOutPointWithValue out24 = spendableOutputs.poll();  Preconditions.checkState(out24 != null);
+        TransactionOutPointWithValue out29 = spendableOutputs.poll();  Preconditions.checkState(out29 != null);
 
-        Block b1001 = createNextBlock(b76, chainHeadHeight + 25, out24, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, b1001, true, false, b1001.getHash(), chainHeadHeight + 25, "b1001"));
+        Block b1001 = createNextBlock(b83, chainHeadHeight + 30, out29, null);
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b1001, true, false, b1001.getHash(), chainHeadHeight + 30, "b1001"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b1001.getTransactions().get(0).getHash()),
                 b1001.getTransactions().get(0).getOutputs().get(0).getValue(),
                 b1001.getTransactions().get(0).getOutputs().get(0).getScriptPubKey()));
+        int nextHeight = chainHeadHeight + 31;
         
         if (runLargeReorgs) {
             // No way you can fit this test in memory
             Preconditions.checkArgument(blockStorageFile != null);
             
             Block lastBlock = b1001;
-            int nextHeight = chainHeadHeight + 26;
             TransactionOutPoint lastOutput = new TransactionOutPoint(params, 2, b1001.getTransactions().get(1).getHash());
             int blockCountAfter1001;
             
@@ -1459,7 +1587,7 @@ public class FullBlockTestGenerator {
                     block.addTransaction(tx);
                 }
                 block.solve();
-                blocks.add(new BlockAndValidity(blockToHeightMap, block, true, false, block.getHash(), nextHeight-1,
+                blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, block, true, false, block.getHash(), nextHeight-1,
                                                 "post-b1001 repeated transaction generator " + blockCountAfter1001 + "/" + TRANSACTION_CREATION_BLOCKS));
                 lastBlock = block;
             }
@@ -1475,7 +1603,7 @@ public class FullBlockTestGenerator {
                     block.addTransaction(tx);
                 }
                 block.solve();
-                blocks.add(new BlockAndValidity(blockToHeightMap, block, true, false, block.getHash(), nextHeight-1, "post-b1001 repeated transaction spender " + i));
+                blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, block, true, false, block.getHash(), nextHeight-1, "post-b1001 repeated transaction spender " + i));
                 lastBlock = block;
                 blockCountAfter1001++;
             }
@@ -1487,7 +1615,7 @@ public class FullBlockTestGenerator {
             lastBlock = b1001;
             for (int i = 0; i < blockCountAfter1001; i++) {
                 Block block = createNextBlock(lastBlock, nextHeight++, null, null);
-                blocks.add(new BlockAndValidity(blockToHeightMap, block, true, false, firstHash, height, "post-b1001 empty reorg block " + i + "/" + blockCountAfter1001));
+                blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, block, true, false, firstHash, height, "post-b1001 empty reorg block " + i + "/" + blockCountAfter1001));
                 lastBlock = block;
             }
             
@@ -1501,11 +1629,11 @@ public class FullBlockTestGenerator {
                 b1002.addTransaction(tx);
             }
             b1002.solve();
-            blocks.add(new BlockAndValidity(blockToHeightMap, b1002, false, true, firstHash, height, "b1002"));
+            blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b1002, false, true, firstHash, height, "b1002"));
             
             // Now actually reorg
             Block b1003 = createNextBlock(lastBlock, nextHeight, null, null);
-            blocks.add(new BlockAndValidity(blockToHeightMap, b1003, true, false, b1003.getHash(), nextHeight, "b1003"));
+            blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b1003, true, false, b1003.getHash(), nextHeight, "b1003"));
             
             // Now try to spend again
             Block b1004 = createNextBlock(b1003, nextHeight+1, null, null);
@@ -1517,12 +1645,10 @@ public class FullBlockTestGenerator {
                 b1004.addTransaction(tx);
             }
             b1004.solve();
-            blocks.add(new BlockAndValidity(blockToHeightMap, b1004, false, true, b1003.getHash(), nextHeight, "b1004"));
+            blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b1004, false, true, b1003.getHash(), nextHeight, "b1004"));
             
             ret.maximumReorgBlockCount = Math.max(ret.maximumReorgBlockCount, blockCountAfter1001);
         }
-        
-        //TODO: Explicitly address MoneyRange() checks
         
         if (outStream != null)
             outStream.close();
@@ -1565,7 +1691,7 @@ public class FullBlockTestGenerator {
         t.addInput(input);
 
         byte[] connectedPubKeyScript = prevOut.scriptPubKey.getProgram();
-        Sha256Hash hash = t.hashTransactionForSignature(0, connectedPubKeyScript, SigHash.ALL, false);
+        Sha256Hash hash = t.hashForSignature(0, connectedPubKeyScript, SigHash.ALL, false);
 
         // Sign input
         try {
