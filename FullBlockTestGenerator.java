@@ -980,7 +980,9 @@ public class FullBlockTestGenerator {
         
         // Block with invalid merkle hash
         Block b49 = createNextBlock(b44, chainHeadHeight + 16, out15, null);
-        b49.setMerkleRoot(Sha256Hash.ZERO_HASH);
+        byte[] b49MerkleHash = Sha256Hash.ZERO_HASH.getBytes().clone();
+        b49MerkleHash[1] = (byte) 0xDE;
+        b49.setMerkleRoot(Sha256Hash.create(b49MerkleHash));
         b49.solve();
         blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b49, false, true, b44.getHash(), chainHeadHeight + 15, "b49"));
         
@@ -1563,7 +1565,7 @@ public class FullBlockTestGenerator {
                 new TransactionOutPoint(params, 0, b1001.getTransactions().get(0).getHash()),
                 b1001.getTransactions().get(0).getOutputs().get(0).getValue(),
                 b1001.getTransactions().get(0).getOutputs().get(0).getScriptPubKey()));
-        int nextHeight = chainHeadHeight + 31;
+        int heightAfter1001 = chainHeadHeight + 31;
         
         if (runLargeReorgs) {
             // No way you can fit this test in memory
@@ -1572,6 +1574,7 @@ public class FullBlockTestGenerator {
             Block lastBlock = b1001;
             TransactionOutPoint lastOutput = new TransactionOutPoint(params, 2, b1001.getTransactions().get(1).getHash());
             int blockCountAfter1001;
+            int nextHeight = heightAfter1001;
             
             List<Sha256Hash> hashesToSpend = new LinkedList<Sha256Hash>(); // all index 0
             final int TRANSACTION_CREATION_BLOCKS = 100;
@@ -1611,7 +1614,7 @@ public class FullBlockTestGenerator {
             // Reorg back to b1001 + empty blocks
             Sha256Hash firstHash = lastBlock.getHash();
             int height = nextHeight-1;
-            nextHeight = chainHeadHeight + 26;
+            nextHeight = heightAfter1001;
             lastBlock = b1001;
             for (int i = 0; i < blockCountAfter1001; i++) {
                 Block block = createNextBlock(lastBlock, nextHeight++, null, null);
