@@ -1558,7 +1558,7 @@ public class FullBlockTestGenerator {
         // -> b81 (26) -> b82 (27) -> b83 (28) -> b84 (29) -> b87 (30) -> b88 (31)
         //                                    \-> b85 (29) -> b86 (30)            \-> b89 (32)
         //
-        TransactionOutPointWithValue out29 = spendableOutputs.poll();  Preconditions.checkState(out29 != null);
+        /*TransactionOutPointWithValue out29 = spendableOutputs.poll();  Preconditions.checkState(out29 != null);
         TransactionOutPointWithValue out30 = spendableOutputs.poll();  Preconditions.checkState(out30 != null);
         TransactionOutPointWithValue out31 = spendableOutputs.poll();  Preconditions.checkState(out31 != null);
         TransactionOutPointWithValue out32 = spendableOutputs.poll();  Preconditions.checkState(out32 != null);
@@ -1634,7 +1634,7 @@ public class FullBlockTestGenerator {
             b89.addTransaction(tx);
             b89.solve();
         }
-        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b89, false, true, b88.getHash(), chainHeadHeight + 32, "b89"));
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b89, false, true, b88.getHash(), chainHeadHeight + 32, "b89"));*/
 
         // The remaining tests arent designed to fit in the standard flow, and thus must always come last
         // Add new tests here.
@@ -1645,13 +1645,14 @@ public class FullBlockTestGenerator {
         // Reorg back to:
         // -> b60 (17) -> b64 (18) -> b65 (19) -> b69 (20) -> b72 (21) -> b1001 (22) -> empty blocks
         //
-        Block b1001 = createNextBlock(b88, chainHeadHeight + 33, out32, null);
-        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b1001, true, false, b1001.getHash(), chainHeadHeight + 33, "b1001"));
+        TransactionOutPointWithValue out29 = spendableOutputs.poll();  Preconditions.checkState(out29 != null);
+        Block b1001 = createNextBlock(b83, chainHeadHeight + 30, out29, null);
+        blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, b1001, true, false, b1001.getHash(), chainHeadHeight + 30, "b1001"));
         spendableOutputs.offer(new TransactionOutPointWithValue(
                 new TransactionOutPoint(params, 0, b1001.getTransactions().get(0).getHash()),
                 b1001.getTransactions().get(0).getOutputs().get(0).getValue(),
                 b1001.getTransactions().get(0).getOutputs().get(0).getScriptPubKey()));
-        int heightAfter1001 = chainHeadHeight + 34;
+        int heightAfter1001 = chainHeadHeight + 31;
         
         if (runLargeReorgs) {
             // No way you can fit this test in memory
