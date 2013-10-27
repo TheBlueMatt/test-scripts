@@ -23,6 +23,7 @@ class BlockAndValidity extends Rule {
     Sha256Hash blockHash;
     boolean connects;
     boolean throwsException;
+    boolean sendOnce; // We can throw away the memory for this block once we send it the first time (if bitcoind asks again, its broken)
     Sha256Hash hashChainTipAfterBlock;
     int heightAfterBlock;
 
@@ -47,6 +48,11 @@ class BlockAndValidity extends Rule {
             Preconditions.checkState(height == heightAfterBlock);
         else
             blockToHeightMap.put(hashChainTipAfterBlock, heightAfterBlock);
+    }
+
+    public BlockAndValidity setSendOnce(boolean sendOnce) {
+        this.sendOnce = sendOnce;
+        return this;
     }
 }
 
@@ -1591,7 +1597,7 @@ public class FullBlockTestGenerator {
                 }
                 block.solve();
                 blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, block, true, false, block.getHash(), nextHeight-1,
-                                                "post-b1001 repeated transaction generator " + blockCountAfter1001 + "/" + TRANSACTION_CREATION_BLOCKS));
+                                                "post-b1001 repeated transaction generator " + blockCountAfter1001 + "/" + TRANSACTION_CREATION_BLOCKS).setSendOnce(true));
                 lastBlock = block;
             }
 
@@ -1606,7 +1612,8 @@ public class FullBlockTestGenerator {
                     block.addTransaction(tx);
                 }
                 block.solve();
-                blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, block, true, false, block.getHash(), nextHeight-1, "post-b1001 repeated transaction spender " + i));
+                blocks.add(new BlockAndValidity(blockToHeightMap, hashHeaderMap, block, true, false, block.getHash(), nextHeight-1,
+                                                "post-b1001 repeated transaction spender " + i).setSendOnce(true));
                 lastBlock = block;
                 blockCountAfter1001++;
             }
