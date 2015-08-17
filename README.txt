@@ -7,6 +7,6 @@ test that their logic for handling valid/invalid blocks matches
 the reference implementation.
 
 Improvements are welcome; the source code used to generate the blocks
-is in FullBlockTesGenerator.java. The source that drives the tool can
+is in FullBlockTestGenerator.java. The source that drives the tool can
 be found at
 https://github.com/TheBlueMatt/bitcoinj/blob/blocktester/core/src/test/java/org/bitcoinj/core/BitcoindComparisonTool.java
